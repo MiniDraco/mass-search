@@ -22,7 +22,11 @@ topic ──► EXPAND (local LLM: 1 seed -> N diverse queries)
       EXTRACT (local LLM pulls the facts/answer out of each result set)
             │
             ▼
-      SYNTHESIZE (local LLM folds all facts -> THE ANSWER + findings, printed)
+      DEEP-READ (fetch the top-ranked sources' FULL page bodies via the same
+            │      polite/ban-safe plumbing, distill from the real text)
+            ▼
+      SYNTHESIZE (local LLM folds all facts -> THE ANSWER; "list me X" goals get
+            │       the verbatim items back, not a summary)
             │
             ▼
       WRITE  → out/<slug>.jsonl      (streamed live, resumable)
@@ -151,8 +155,11 @@ Env (both `MASS_` and `RIPOSTE_` prefixes work):
 | var | default | meaning |
 |-----|---------|---------|
 | `MASS_BACKEND` | auto | force `local` / `gemini` / `offline` |
-| `MASS_LOCAL_MODEL` | first found | e.g. `hermes3:8b` |
+| `MASS_LOCAL_MODEL` | first found | e.g. `hermes3:8b` (query-expansion + snippet distill) |
+| `MASS_EXTRACT_MODEL` | =local model | heavier model for deep-read + synthesis (e.g. a 14B–32B on the idle GPU) |
 | `MASS_LOCAL_URL` | auto | override the local endpoint |
+| `MASS_DEEPREAD_K` | `8` | how many top sources to read full-body per campaign |
+| `MASS_DEEPREAD_CHARS` | `12000` | chars of page text fed to the distiller |
 | `MASS_SEARCH_GAP` | `1.5` | default min seconds between hits to one host (per-host overrides in code) |
 | `MASS_HOST_CAP` | `300` | hard cap on requests to any one host per run |
 | `MASS_CACHE_TTL` | 604800 | search cache lifetime, seconds (7 days) |
@@ -198,6 +205,25 @@ python mass_search.py "your topic" --backends web --queries 30 --workers 8
 Config lives in `D:\AI\searxng\my-settings.yml` (JSON format enabled, limiter off
 for local use). A `pwd.py` shim in that folder covers a Unix-only import so it runs
 on Windows. Add more upstream engines by editing `my-settings.yml`.
+
+## Where it's strong / where it's weak
+
+Field-tested over multi-campaign runs (hundreds of requests, zero bans):
+
+- **Strong:** discovery + ban-safety. It finds the authoritative pages with no
+  search cap and never gets the IP blocked — the circuit breaker routes around
+  every soft block. Deep-read + extractive mode turn "list me X" goals into the
+  actual verbatim list, not a summary.
+- **The ceiling is synthesis quality, and it's known + isolated:**
+  1. *Source selection* — deep-read reads the top-K by a coarse relevance rank, so
+     an off-topic page can slip into the read set and add noise. Better
+     goal-aware ranking (roadmap) is the main lever here.
+  2. *Extraction model* — one 8B does the reasoning by default. Point
+     `MASS_EXTRACT_MODEL` at a 14B–32B for cleaner facts/lists.
+
+**Roadmap:** goal-aware source ranking before deep-read · computed confidence
+(source count × agreement × relevance) instead of self-graded · auto-select the
+resolver group by topic · promote local SearXNG to the primary general-web index.
 
 ## Output shape
 

@@ -36,8 +36,8 @@ def _wrap(text, indent=0):
 
 
 def _slugify(text):
-    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return (s[:48] or "search")
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower())[:48].strip("-")   # strip after truncate (P5)
+    return (s or "search")
 
 
 def _load_file(path):
@@ -68,6 +68,8 @@ def main():
                          + ",".join(search.BACKENDS))
     ap.add_argument("--no-extract", action="store_true", help="skip the local-LLM distillation step")
     ap.add_argument("--no-synth", action="store_true", help="skip the final synthesis (the answer)")
+    ap.add_argument("--no-deepread", action="store_true",
+                    help="skip reading the top sources' full page bodies (snippets only)")
     ap.add_argument("--dry-run", action="store_true", help="just print the expanded queries and exit")
     args = ap.parse_args()
 
@@ -110,7 +112,7 @@ def main():
         queries, slug, goal=goal, backends=backends,
         workers=args.workers, per_backend=args.per_backend,
         do_extract=not args.no_extract, do_synth=not args.no_synth,
-        on_progress=_progress,
+        do_deepread=not args.no_deepread, on_progress=_progress,
     )
     print("-" * 60)
     rep = search.status_report()

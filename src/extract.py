@@ -8,6 +8,7 @@ query in the campaign.
 
 No LLM? extract() is skipped; the raw hits are still written to file.
 """
+import re
 from . import brain
 
 _EXTRACT_PROMPT = """You are a research analyst. Below are web search results for one query in a larger research campaign.
@@ -56,3 +57,47 @@ def extract(goal, query, results):
         "facts": [str(f).strip() for f in facts if str(f).strip()],
         "relevance": float(data.get("relevance", 0.0) or 0.0),
     }
+
+
+# ---- P1: deep extraction from a full page body ----------------------------
+_DEEP_PROMPT = """You are a research analyst reading ONE full source page.
+
+CAMPAIGN GOAL: {goal}
+SOURCE: {url}
+
+PAGE TEXT (may be truncated):
+{text}
+
+From ONLY what THIS page says, extract what's relevant to the goal.
+{mode}
+Return ONLY a JSON object: {{"facts": ["<item>", ...]}}"""
+
+_DEEP_MODE_LIST = ("This goal asks for a LIST: extract the ACTUAL items VERBATIM "
+                   "(each word / phrase / entry exactly as written on the page), "
+                   "as many as the page contains. Do not summarize or paraphrase.")
+_DEEP_MODE_FACT = "Extract specific, concrete facts / data points (not vague summary)."
+
+# goals that want enumerated items back verbatim, not an abstractive summary (P3)
+_ENUM_RE = re.compile(r"\b(list|lists|words|phrases|terms|examples|names|"
+                      r"vocabulary|banned|overused|clich|enumerate)\b", re.I)
+
+
+def is_enumerable(goal):
+    return bool(_ENUM_RE.search(goal or ""))
+
+
+def extract_deep(goal, url, text, enumerable=False, model=None):
+    """Distill facts (or verbatim list items) from a full page body. -> [str]."""
+    if not brain.has_llm() or not text:
+        return []
+    mode = _DEEP_MODE_LIST if enumerable else _DEEP_MODE_FACT
+    try:                                              # deepread already caps the body length
+        res = brain.ask(_DEEP_PROMPT.format(goal=goal, url=url, text=text, mode=mode),
+                        want_json=True, model=model)
+        data = brain.extract_json(res["text"])
+    except Exception:
+        return []
+    facts = data.get("facts") if isinstance(data, dict) else None
+    if not isinstance(facts, list):
+        return []
+    return [str(f).strip() for f in facts if str(f).strip()]

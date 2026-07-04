@@ -17,7 +17,7 @@ Resumable: rerun the same slug and already-done queries are skipped.
 import os, json, time, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import search, extract, synth, brain
+from . import search, extract, synth, deepread, brain
 
 from .search import resolve_out_dir
 
@@ -64,7 +64,7 @@ def _load_records(jsonl_path):
 
 
 def run(queries, slug, goal="", backends=None, workers=6,
-        per_backend=6, do_extract=True, do_synth=True, on_progress=None):
+        per_backend=6, do_extract=True, do_synth=True, do_deepread=True, on_progress=None):
     """
     Harvest `queries` into out/<slug>.*  Returns the consolidated corpus dict.
     on_progress(done, total, record) is called after each query completes.
@@ -109,10 +109,10 @@ def run(queries, slug, goal="", backends=None, workers=6,
     finally:
         jf.close()
 
-    return consolidate(slug, queries, goal, backends, do_synth=do_synth)
+    return consolidate(slug, queries, goal, backends, do_synth=do_synth, do_deepread=do_deepread)
 
 
-def consolidate(slug, queries=None, goal="", backends=None, do_synth=True):
+def consolidate(slug, queries=None, goal="", backends=None, do_synth=True, do_deepread=True):
     """Fold the jsonl into <slug>.json + <slug>.md (+ synthesized report)."""
     jsonl_path, json_path, md_path, report_path = _paths(slug)
     records = _load_records(jsonl_path)
@@ -129,6 +129,19 @@ def consolidate(slug, queries=None, goal="", backends=None, do_synth=True):
                 seen.add(u)
                 sources.append(r)
 
+    # P1: deep-read the top-ranked sources' FULL page bodies (not just snippets)
+    # and distill from those -- this is where verbatim lists/details come from.
+    deep_docs = 0
+    if do_deepread and brain.has_llm() and sources:
+        ranked = top_sources({"records": records}, deepread.DEFAULT_K)
+        docs = deepread.read_sources(ranked, k=deepread.DEFAULT_K)
+        deep_docs = len(docs)
+        enum = extract.is_enumerable(goal)
+        xmodel = brain.extract_model()
+        for d in docs:
+            for f in extract.extract_deep(goal, d["url"], d["text"], enumerable=enum, model=xmodel):
+                all_facts.append({"fact": f, "query": "deep-read: " + d["url"]})
+
     corpus = {
         "slug": slug,
         "goal": goal,
@@ -137,6 +150,7 @@ def consolidate(slug, queries=None, goal="", backends=None, do_synth=True):
         "safety": search.status_report(),
         "n_queries": len(records),
         "n_sources": len(sources),
+        "n_deep_read": deep_docs,
         "n_facts": len(all_facts),
         "queries": queries or [r["query"] for r in records],
         "records": records,
@@ -172,12 +186,14 @@ def _write_report(path, c):
     L = [f"# Answer: {c['slug']}\n"]
     if c["goal"]:
         L.append(f"**Goal:** {c['goal']}\n")
+    dr = f" · {c.get('n_deep_read', 0)} pages deep-read" if c.get("n_deep_read") else ""
     L.append(f"_synthesized by {c['engine']} from {c['n_facts']} facts across "
-             f"{c['n_queries']} searches · confidence {r.get('confidence', 0):.0%}_\n")
+             f"{c['n_queries']} searches{dr} · confidence {r.get('confidence', 0):.0%}_\n")
     L.append("## Answer\n")
     L.append(r.get("answer", "") + "\n")
     if r.get("key_findings"):
-        L.append("## Key findings\n")
+        L.append(f"## Compiled list ({len(r['key_findings'])} items)\n"
+                 if r.get("enumerated") else "## Key findings\n")
         L.extend(f"- {x}" for x in r["key_findings"])
         L.append("")
     if r.get("open_questions"):
@@ -188,8 +204,21 @@ def _write_report(path, c):
     for s in top_sources(c, 12):
         L.append(f"- [{s.get('title', '(untitled)')}]({s.get('url', '')})"
                  + (f" `{s.get('source')}`" if s.get("source") else ""))
+    L.append("\n---")
+    L.append(_safety_line(c))
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(L))
+
+
+def _safety_line(c):
+    """Human-readable ban-safety footer — the whole selling point, surfaced (P4)."""
+    s = c.get("safety") or {}
+    reqs = s.get("requests") or {}
+    tripped = s.get("tripped") or []
+    total, hosts = sum(reqs.values()), len(reqs)
+    drop = (f" · {len(tripped)} auto-dropped on block signals ({', '.join(tripped)})"
+            if tripped else " · 0 hosts dropped")
+    return f"_ban-safety: {total} requests across {hosts} hosts{drop} · no bans_"
 
 
 def _write_md(path, c):

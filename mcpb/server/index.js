@@ -37,10 +37,10 @@ const TOOLS = [
     name: "mass_search",
     description:
       "Run a full local research CAMPAIGN: a local LLM fans the question into many diverse " +
-      "queries, harvests them in parallel across keyless resolvers, distills each, and " +
-      "SYNTHESIZES a direct, source-grounded answer. Keyless + local = no usage limits. " +
-      "Returns the answer + key findings + top sources; the full corpus is saved to disk " +
-      "(see read_campaign). May take a while for large campaigns.",
+      "queries, harvests them in parallel across keyless resolvers, DEEP-READS the top sources' " +
+      "full page bodies, and SYNTHESIZES a direct, source-grounded answer (list-type goals get " +
+      "the verbatim items). Keyless + local = no usage limits. Returns the answer + findings + " +
+      "top sources; full corpus saved to disk (see read_campaign). Runs in the background.",
     inputSchema: {
       type: "object",
       properties: {
@@ -48,6 +48,7 @@ const TOOLS = [
         queries: { type: "integer", description: "how many queries to expand into", default: 12 },
         backends: { type: "string", description: "group or comma-list", default: "web" },
         workers: { type: "integer", description: "parallel search workers", default: 6 },
+        deep: { type: "boolean", description: "read the top sources' full page bodies (not just snippets)", default: true },
         synth: { type: "boolean", description: "synthesize the final answer", default: true },
         extract: { type: "boolean", description: "LLM-distill each result set", default: true }
       },

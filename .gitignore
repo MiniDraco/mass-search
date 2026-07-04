@@ -20,3 +20,6 @@ mcpb/server/masssearch/
 # stray cache/data anywhere in the tree
 **/data/cache/
 **/out/
+
+# operator field reports stay local
+reports/

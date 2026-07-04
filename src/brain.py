@@ -32,6 +32,9 @@ _GEMINI_URL  = "https://generativelanguage.googleapis.com/v1beta/models/{model}:
 
 LOCAL_URL    = _env("LOCAL_URL")
 LOCAL_MODEL  = _env("LOCAL_MODEL")
+# P2: an optional heavier model for extraction/synthesis (e.g. a 14B-32B on the
+# idle-GPU Ollama). Falls back to the main model when unset.
+EXTRACT_MODEL = _env("EXTRACT_MODEL")
 
 
 def _detect_local():
@@ -176,8 +179,9 @@ def _offline(prompt, grounded, want_json):
 
 
 # ---- local LLM (Ollama / OpenAI-compatible) -------------------------------
-def _local(prompt, want_json):
-    base, model, flavor = _LOCAL
+def _local(prompt, want_json, model=None):
+    base, default_model, flavor = _LOCAL
+    model = model or default_model
     if flavor == "ollama":
         url = base + "/api/chat"
         body = {"model": model, "stream": False,
@@ -206,19 +210,26 @@ def _local(prompt, want_json):
     return {"text": text.strip(), "sources": []}
 
 
-def ask(prompt, want_json=False, grounded=False):
+def ask(prompt, want_json=False, grounded=False, model=None):
     if BACKEND == "gemini":
         return _gemini(prompt, grounded, want_json)
     if BACKEND == "local":
-        return _local(prompt, want_json)
+        return _local(prompt, want_json, model=model)
     return _offline(prompt, grounded, want_json)
+
+
+def extract_model():
+    """The model to use for extraction/synthesis: MASS_EXTRACT_MODEL if set and a
+    local backend is active, else None (main model). (P2)"""
+    return EXTRACT_MODEL if (EXTRACT_MODEL and BACKEND == "local") else None
 
 
 def engine_info():
     if BACKEND == "gemini":
         return f"gemini ({GEMINI_MODEL})"
     if BACKEND == "local":
-        return f"local ({_LOCAL[2]}:{_LOCAL[1]} @ {_LOCAL[0]})"
+        xm = f" +extract:{EXTRACT_MODEL}" if extract_model() else ""
+        return f"local ({_LOCAL[2]}:{_LOCAL[1]} @ {_LOCAL[0]}{xm})"
     return "offline / no-LLM (raw evidence only)"
 
 
