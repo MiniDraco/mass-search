@@ -14,12 +14,56 @@ Outputs (in out/):
 
 Resumable: rerun the same slug and already-done queries are skipped.
 """
-import os, json, time, threading
+import os, re, json, time, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import search, extract, synth, deepread, brain
 
 from .search import resolve_out_dir
+
+# stopwords stripped from a goal when scoring source topical relevance
+_STOP = set("the a an of for to in on at by and or with is are was were be been "
+            "how what which who whom whose why when where best most top vs list "
+            "lists give me find about into over your you i we they it that this "
+            "com www http https org net html".split())
+
+
+def _goal_tokens(goal):
+    return {t for t in re.findall(r"[a-z0-9]{3,}", (goal or "").lower()) if t not in _STOP}
+
+
+_LIST_TITLE = re.compile(r"\b\d+\+?\b.{0,30}\b(words|phrases|terms|list|examples|tips|ways)\b", re.I)
+_LIST_HINT = re.compile(r"\b(list|words|phrases|terms|avoid|overused|common|examples|banned|glossary)\b", re.I)
+
+
+def rank_sources_for_goal(goal, records, k, enumerable=False):
+    """Pick the K most ON-TOPIC sources to deep-read (goal-keyword overlap + the
+    relevance of the query that found them + a list-page bonus). This keeps
+    off-topic pages that merely rode in on a high-relevance query OUT of the
+    expensive full-body read -- the main fix for deep-read noise."""
+    toks = _goal_tokens(goal)
+    best = {}
+    for rec in records:
+        rel = (rec.get("digest") or {}).get("relevance", 0.0) or 0.0
+        for r in rec.get("results", []):
+            u = r.get("url", "")
+            if not u:
+                continue
+            title = (r.get("title") or "")
+            hay = (title + " " + (r.get("snippet") or "") + " " + u).lower()
+            overlap = sum(1 for t in toks if t in hay)
+            score = overlap * 2.0 + rel
+            if enumerable and title:
+                if _LIST_TITLE.search(title):
+                    score += 4.0
+                elif _LIST_HINT.search(title):
+                    score += 1.5
+            if u not in best or score > best[u][0]:
+                best[u] = (score, overlap, r)
+    ranked = sorted(best.values(), key=lambda x: x[0], reverse=True)
+    on_topic = [r for sc, ov, r in ranked if ov > 0]      # require real keyword overlap
+    picked = (on_topic or [r for sc, ov, r in ranked])[:k]
+    return picked
 
 OUT = (resolve_out_dir()
        or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "out"))
@@ -129,11 +173,12 @@ def consolidate(slug, queries=None, goal="", backends=None, do_synth=True, do_de
                 seen.add(u)
                 sources.append(r)
 
-    # P1: deep-read the top-ranked sources' FULL page bodies (not just snippets)
+    # P1: deep-read the top ON-TOPIC sources' FULL page bodies (not just snippets)
     # and distill from those -- this is where verbatim lists/details come from.
     deep_docs = 0
     if do_deepread and brain.has_llm() and sources:
-        ranked = top_sources({"records": records}, deepread.DEFAULT_K)
+        ranked = rank_sources_for_goal(goal, records, deepread.DEFAULT_K,
+                                       enumerable=extract.is_enumerable(goal))
         docs = deepread.read_sources(ranked, k=deepread.DEFAULT_K)
         deep_docs = len(docs)
         enum = extract.is_enumerable(goal)
@@ -158,6 +203,17 @@ def consolidate(slug, queries=None, goal="", backends=None, do_synth=True, do_de
         "facts": all_facts,
     }
     corpus["report"] = synth.synthesize(goal, all_facts) if do_synth else None
+
+    # P7: replace the model's self-graded confidence with a grounded score
+    # (mean query relevance x deep-read coverage x fact volume). Enumerable mode
+    # computes its own corroboration-based confidence, so leave that one alone.
+    rep = corpus["report"]
+    if rep and not rep.get("enumerated"):
+        rels = [(r.get("digest") or {}).get("relevance", 0.0) or 0.0 for r in records if r.get("digest")]
+        mrel = sum(rels) / len(rels) if rels else 0.0
+        cov = min(1.0, deep_docs / float(deepread.DEFAULT_K))
+        vol = min(1.0, len(all_facts) / 40.0)
+        rep["confidence"] = round(min(0.9, 0.20 + 0.45 * mrel + 0.20 * cov + 0.15 * vol), 2)
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(corpus, f, ensure_ascii=False, indent=2)
@@ -201,7 +257,10 @@ def _write_report(path, c):
         L.extend(f"- {x}" for x in r["open_questions"])
         L.append("")
     L.append("## Top sources\n")
-    for s in top_sources(c, 12):
+    enum = bool((c.get("report") or {}).get("enumerated"))
+    srcs = (rank_sources_for_goal(c.get("goal", ""), c.get("records", []), 12, enumerable=enum)
+            if c.get("records") else None) or top_sources(c, 12)
+    for s in srcs:
         L.append(f"- [{s.get('title', '(untitled)')}]({s.get('url', '')})"
                  + (f" `{s.get('source')}`" if s.get("source") else ""))
     L.append("\n---")

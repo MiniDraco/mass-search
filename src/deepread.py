@@ -15,7 +15,8 @@ from . import search
 MAX_CHARS = int(os.environ.get("MASS_DEEPREAD_CHARS", "12000"))
 DEFAULT_K = int(os.environ.get("MASS_DEEPREAD_K", "8"))
 
-_BLOCKS = re.compile(r"<(script|style|noscript|svg|head|nav|footer)[^>]*>.*?</\1>", re.S | re.I)
+_BLOCKS = re.compile(r"<(script|style|noscript|svg|head|nav|footer|header|aside|form|button)[^>]*>.*?</\1>",
+                     re.S | re.I)
 _TAGS = re.compile(r"<[^>]+>")
 _WS = re.compile(r"[ \t\r\f\v]+")
 _NL = re.compile(r"\n\s*\n+")

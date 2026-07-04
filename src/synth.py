@@ -9,9 +9,19 @@ this stage produces (local LLM, so it's free to run on every campaign).
 Map-reduce when there are many facts, so nothing is silently dropped: summarize
 in chunks, then synthesize from the partial findings.
 """
+import re
 from . import brain, extract
 
 _CHUNK = 60
+
+# page-chrome / navigation junk that leaks into deep-read extraction
+_JUNK = re.compile(r"(tagged with|table of contents|add a header|read more|"
+                   r"subscribe|newsletter|cookie|privacy policy|sign in|log in|"
+                   r"»|\||©|^https?://|^\W*$|latecomer|walknotes)", re.I)
+
+
+def _clean_item(fact):
+    return fact.strip().lstrip("-*0123456789.)• \t").strip().strip('"“”\'')
 
 _SYNTH_PROMPT = """You are a research analyst closing out a search campaign.
 Synthesize a final answer to the GOAL using ONLY the harvested facts below. Do
@@ -50,23 +60,32 @@ def _call(goal, fact_lines, model=None):
 
 
 def _enumerate(goal, facts):
-    """P3: for a 'list me X' goal, the answer IS the deduped list of items -- no
-    abstractive summary that would throw the actual entries away. Prefer the
-    verbatim deep-read page items over the per-query snippet summaries."""
+    """P3: for a 'list me X' goal, the answer IS the list -- but rank items by
+    how many distinct sources corroborate each one. Real entries recur across
+    many pages; page-chrome noise appears once, so corroboration separates
+    signal from junk. Prefer deep-read page items over snippet summaries."""
     deep = [f for f in facts if f.get("query", "").startswith("deep-read:")]
     pool = deep or facts
-    seen, items = set(), []
+    freq = {}                                        # key -> [display, {sources}]
     for f in pool:
-        v = f["fact"].strip().lstrip("-*0123456789.) ").strip()
-        k = v.lower()
-        if v and 1 <= len(v) <= 120 and k not in seen:
-            seen.add(k)
-            items.append(v)
+        v = _clean_item(f["fact"])
+        if not v or not (1 <= len(v) <= 120) or _JUNK.search(v):
+            continue
+        entry = freq.setdefault(v.lower(), [v, set()])
+        entry[1].add(f.get("query", ""))
+    scored = sorted(([len(src), disp] for disp, src in freq.values()),
+                    key=lambda x: (-x[0], x[1].lower()))
+    corroborated = [d for c, d in scored if c >= 2]
+    singles = [d for c, d in scored if c < 2]
+    items = (corroborated + (singles if len(corroborated) < 25 else []))[:400]
+    n_corr = len(corroborated)
+    conf = round(min(0.95, 0.35 + 0.6 * (n_corr / max(1, len(items)))), 2) if items else 0.0
     return {
-        "answer": f"Compiled {len(items)} distinct items for: {goal}",
-        "key_findings": items,                       # the list itself, verbatim
+        "answer": (f"Compiled {len(items)} items for \"{goal}\" -- "
+                   f"{n_corr} corroborated across 2+ sources (listed first)."),
+        "key_findings": items,
         "open_questions": [],
-        "confidence": round(min(0.95, 0.4 + len(items) / 300.0), 2),
+        "confidence": conf,
         "enumerated": True,
     }
 

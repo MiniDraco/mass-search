@@ -212,18 +212,21 @@ Field-tested over multi-campaign runs (hundreds of requests, zero bans):
 
 - **Strong:** discovery + ban-safety. It finds the authoritative pages with no
   search cap and never gets the IP blocked — the circuit breaker routes around
-  every soft block. Deep-read + extractive mode turn "list me X" goals into the
-  actual verbatim list, not a summary.
-- **The ceiling is synthesis quality, and it's known + isolated:**
-  1. *Source selection* — deep-read reads the top-K by a coarse relevance rank, so
-     an off-topic page can slip into the read set and add noise. Better
-     goal-aware ranking (roadmap) is the main lever here.
-  2. *Extraction model* — one 8B does the reasoning by default. Point
-     `MASS_EXTRACT_MODEL` at a 14B–32B for cleaner facts/lists.
+  every soft block.
+- **Deep-read + extractive mode** turn "list me X" goals into the actual verbatim
+  list. **Goal-aware ranking** keeps off-topic pages out of the deep-read, and
+  **cross-source corroboration** ranks items by how many sources repeat them —
+  so recurring real entries surface and one-off page-chrome noise drops. Example:
+  *"list of overused AI words"* → a clean 52-item list, all corroborated across
+  2+ sources (elevate, delve, tapestry, plethora, seamless, "in today's digital
+  age"…), no blog-title junk.
+- **Confidence is computed**, not self-graded — from cross-source corroboration
+  (list goals) or mean relevance × deep-read coverage × fact volume (prose goals).
+- **Remaining lever:** the default reasoner is an 8B. Point `MASS_EXTRACT_MODEL`
+  at a 14B–32B (e.g. on the idle-GPU Ollama) for even cleaner extraction.
 
-**Roadmap:** goal-aware source ranking before deep-read · computed confidence
-(source count × agreement × relevance) instead of self-graded · auto-select the
-resolver group by topic · promote local SearXNG to the primary general-web index.
+**Roadmap:** auto-select the resolver group by topic · promote local SearXNG to
+the primary general-web index · widen list coverage (read more listicles per run).
 
 ## Output shape
 
