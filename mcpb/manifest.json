@@ -1,0 +1,84 @@
+{
+  "manifest_version": "0.3",
+  "name": "mass-search",
+  "display_name": "Mass Search",
+  "version": "0.3.0",
+  "description": "Keyless, local-hardware mass web search + research synthesis. No API keys, no usage limits.",
+  "long_description": "Mass Search turns a question into a whole research campaign: a local LLM fans it into many diverse queries, harvests them in parallel across free/keyless resolvers (DuckDuckGo, Wikipedia, Hacker News, Crossref, OpenAlex, Semantic Scholar, GitHub, StackExchange, and an optional local SearXNG), distills each result set, and synthesizes a direct, source-grounded answer. Everything runs on your own hardware with no API keys, so there are no per-call usage limits. A per-host circuit breaker keeps your IP ban-safe. Node transport (bundled with Claude Desktop) drives a dependency-free stdlib Python engine, so it needs Python 3.9+ installed on your machine.",
+  "author": {
+    "name": "MiniDraco"
+  },
+  "license": "MIT",
+  "keywords": ["search", "research", "web-search", "local", "keyless", "ollama", "offline"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "MASS_PYTHON": "${user_config.python_path}",
+        "MASS_OUT_DIR": "${user_config.output_dir}",
+        "MASS_LOCAL_URL": "${user_config.ollama_url}",
+        "MASS_LOCAL_MODEL": "${user_config.ollama_model}",
+        "MASS_SEARXNG_URL": "${user_config.searxng_url}",
+        "MASS_CONTACT": "${user_config.contact_email}"
+      }
+    }
+  },
+  "tools": [
+    {"name": "web_search", "description": "Fast keyless multi-resolver web search."},
+    {"name": "mass_search", "description": "Full local research campaign -> synthesized answer."},
+    {"name": "read_campaign", "description": "Reopen a saved campaign's report/corpus by slug."}
+  ],
+  "user_config": {
+    "python_path": {
+      "type": "string",
+      "title": "Python command",
+      "description": "How to launch Python (needs Python 3.9+ on your machine). Usually 'python'; use a full path or 'py' if that fails.",
+      "default": "python",
+      "required": false
+    },
+    "output_dir": {
+      "type": "string",
+      "title": "Output folder",
+      "description": "Where campaign results (jsonl/json/md) are written.",
+      "default": "${HOME}/mass-search",
+      "required": false
+    },
+    "ollama_url": {
+      "type": "string",
+      "title": "Local LLM URL",
+      "description": "Ollama / OpenAI-compatible endpoint. Blank = auto-detect (:11435, :11434, :1234).",
+      "default": "",
+      "required": false
+    },
+    "ollama_model": {
+      "type": "string",
+      "title": "Local LLM model",
+      "description": "e.g. hermes3:8b. Blank = first model found.",
+      "default": "hermes3:8b",
+      "required": false
+    },
+    "searxng_url": {
+      "type": "string",
+      "title": "Local SearXNG URL (optional)",
+      "description": "e.g. http://127.0.0.1:8888 to enable the SearXNG resolver.",
+      "default": "",
+      "required": false
+    },
+    "contact_email": {
+      "type": "string",
+      "title": "Contact email (optional)",
+      "description": "Put in the User-Agent + polite-pool mailto (Wikipedia/Crossref/OpenAlex ask for it).",
+      "default": "",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["win32", "darwin", "linux"]
+  }
+}

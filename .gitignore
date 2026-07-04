@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime data (search cache + campaign outputs are machine-local)
+data/cache/
+out/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated into the bundle by build_mcpb.py (source of truth is src/)
+mcpb/server/masssearch/
+
+# stray cache/data anywhere in the tree
+**/data/cache/
+**/out/
