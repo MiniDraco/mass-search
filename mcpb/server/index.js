@@ -45,6 +45,7 @@ const TOOLS = [
       type: "object",
       properties: {
         question: { type: "string", description: "the research goal/question" },
+        scope: { type: "string", enum: ["quick", "broad", "exhaustive"], description: "breadth dial for list goals: quick=one fast pass; broad/exhaustive=UBIQUITY census (harvest mentions from every page, loop to saturation, keep everything). 'every/all X' auto-selects exhaustive." },
         queries: { type: "integer", description: "how many queries to expand into", default: 12 },
         backends: { type: "string", description: "group or comma-list", default: "web" },
         workers: { type: "integer", description: "parallel search workers", default: 6 },

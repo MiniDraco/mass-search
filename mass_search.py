@@ -27,7 +27,15 @@ Outputs land in out/<slug>.jsonl (live), out/<slug>.json, out/<slug>.md.
 import os, sys, re, argparse, textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from src import brain, search, expand, harvest
+from src import brain, search, expand, extract, harvest, census
+
+_EXHAUSTIVE = re.compile(r"\b(every|all|complete|comprehensive|exhaustive|master list|as many)\b", re.I)
+
+
+def _auto_scope(goal):
+    if extract.is_enumerable(goal) and _EXHAUSTIVE.search(goal or ""):
+        return "exhaustive"
+    return "quick"
 
 
 def _wrap(text, indent=0):
@@ -72,6 +80,9 @@ def main():
                     help="skip reading the top sources' full page bodies (snippets only)")
     ap.add_argument("--no-discover", action="store_true",
                     help="skip following the seeds' on-topic links to new sources")
+    ap.add_argument("--scope", choices=["auto", "quick", "broad", "exhaustive"], default="auto",
+                    help="breadth for list goals: quick=one pass; broad/exhaustive=ubiquity census "
+                         "(mention-harvest + loop to saturation). auto picks exhaustive for 'every X'.")
     ap.add_argument("--dry-run", action="store_true", help="just print the expanded queries and exit")
     args = ap.parse_args()
 
@@ -96,27 +107,42 @@ def main():
         print(f"Expanding \"{seed}\" into up to {args.queries} queries ...")
         queries = expand.expand(seed, args.queries)
 
-    if not queries:
+    scope = _auto_scope(goal) if args.scope == "auto" else args.scope
+    census_mode = scope in ("broad", "exhaustive") and extract.is_enumerable(goal)
+
+    if not census_mode and not queries:
         ap.error("no queries to run")
 
     print(f"\n== Mass Search: {slug} ==")
     print(f"Engine:   {brain.engine_info()}")
     print(f"Backends: {', '.join(backends)}   Workers: {args.workers}")
-    print(f"Queries:  {len(queries)}   Distill: {'off' if args.no_extract else 'on'}")
-    print("-" * 60)
-    for i, q in enumerate(queries, 1):
-        print(f"  {i:>2}. {q}")
-    if args.dry_run:
-        return
 
-    print("-" * 60)
-    corpus = harvest.run(
-        queries, slug, goal=goal, backends=backends,
-        workers=args.workers, per_backend=args.per_backend,
-        do_extract=not args.no_extract, do_synth=not args.no_synth,
-        do_deepread=not args.no_deepread, do_discover=not args.no_discover,
-        on_progress=_progress,
-    )
+    if census_mode:
+        print(f"Mode:     UBIQUITY census (scope={scope})   Entity: {extract.target_entity(goal)}")
+        if args.dry_run:
+            return
+        print("-" * 60)
+        corpus = census.run(
+            goal, slug, scope=scope, backends=backends, workers=args.workers,
+            on_progress=lambda rnd, tot, rec: print(
+                f"  round {rnd}/{tot}: {rec.get('pages_read', 0)} pages read, "
+                f"+{rec['new_items']} new -> {rec['total_items']} total"),
+        )
+    else:
+        print(f"Queries:  {len(queries)}   Distill: {'off' if args.no_extract else 'on'}")
+        print("-" * 60)
+        for i, q in enumerate(queries, 1):
+            print(f"  {i:>2}. {q}")
+        if args.dry_run:
+            return
+        print("-" * 60)
+        corpus = harvest.run(
+            queries, slug, goal=goal, backends=backends,
+            workers=args.workers, per_backend=args.per_backend,
+            do_extract=not args.no_extract, do_synth=not args.no_synth,
+            do_deepread=not args.no_deepread, do_discover=not args.no_discover,
+            on_progress=_progress,
+        )
     print("-" * 60)
     rep = search.status_report()
     if rep["tripped"]:

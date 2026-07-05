@@ -86,6 +86,49 @@ def is_enumerable(goal):
     return bool(_ENUM_RE.search(goal or ""))
 
 
+# ---- ubiquity: harvest every mention of an entity type from ARBITRARY prose --
+_MENTION_PROMPT = """Read the text below and list EVERY {entity} that is named or mentioned in it — exact names, verbatim. Include obscure, regional, historical, brand, or one-off names. INCLUDE nothing that is not a {entity}. If none appear, return an empty list.
+
+TEXT:
+{text}
+
+Return ONLY JSON: {{"mentions": ["<name as written>", ...]}}"""
+
+_LEAD = re.compile(r"^\s*(please\s+)?(give me\s+|make\s+|build\s+|find\s+|compile\s+)?"
+                   r"(a\s+|an\s+|the\s+)?(complete\s+|comprehensive\s+|exhaustive\s+|full\s+|master\s+)?"
+                   r"(list|catalog|catalogue|census|index|collection|database)\b\s*(of\s+)?", re.I)
+_LEADQ = re.compile(r"^\s*(every|all|each|any)\s+", re.I)
+_TRAIL = re.compile(r"\b((ever\s+)?(mentioned|named|listed|found|referenced|documented|recorded)"
+                    r"|on the (net|web|internet)|online|in existence|that exists?|anywhere)\b.*$", re.I)
+
+
+def target_entity(goal):
+    """Reduce a goal like 'list every musical instrument ever mentioned on the net'
+    to the entity noun phrase 'musical instrument', for mention harvesting."""
+    g = (goal or "").strip()
+    g = _LEAD.sub("", g)
+    g = _LEADQ.sub("", g)
+    g = _TRAIL.sub("", g).strip(" .,-")
+    return g or (goal or "").strip()
+
+
+def extract_mentions(entity, text, model=None):
+    """Every mention of `entity` in arbitrary page text (verbatim) -> [str].
+    This is what turns any prose page into a source, not just listicles."""
+    if not brain.has_llm() or not text:
+        return []
+    try:
+        res = brain.ask(_MENTION_PROMPT.format(entity=entity, text=text[:6000]),
+                        want_json=True, model=model)
+        data = brain.extract_json(res["text"])
+    except Exception:
+        return []
+    m = data.get("mentions") if isinstance(data, dict) else None
+    if not isinstance(m, list):
+        return []
+    return [str(x).strip() for x in m if str(x).strip()]
+
+
 def extract_deep(goal, url, text, enumerable=False, model=None):
     """Distill facts (or verbatim list items) from a full page body. -> [str]."""
     if not brain.has_llm() or not text:

@@ -9,7 +9,17 @@ redirected to stderr by the caller, so nothing here needs to worry about stdout.
 import sys, os, re, json, contextlib, subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from masssearch import brain, search, expand, harvest   # noqa: E402
+from masssearch import brain, search, expand, extract, harvest, census   # noqa: E402
+
+_EXHAUSTIVE = re.compile(r"\b(every|all|complete|comprehensive|exhaustive|master list|as many)\b", re.I)
+
+
+def _pick_scope(goal, explicit):
+    if explicit in ("quick", "broad", "exhaustive"):
+        return explicit
+    if extract.is_enumerable(goal) and _EXHAUSTIVE.search(goal or ""):
+        return "exhaustive"                          # "every X" auto-triggers ubiquity mode
+    return "quick"
 
 
 def _slug(text):
@@ -54,11 +64,16 @@ def run_campaign(params):
     _quiet(_do_campaign, question, int(params.get("queries", 12)), names,
            int(params.get("workers", 6)), bool(params.get("synth", True)),
            bool(params.get("extract", True)), bool(params.get("deep", True)),
-           bool(params.get("discover", True)))
+           bool(params.get("discover", True)), _pick_scope(question, params.get("scope")))
 
 
-def _do_campaign(question, n, names, workers, do_synth, do_extract, do_deepread=True, do_discover=True):
+def _do_campaign(question, n, names, workers, do_synth, do_extract,
+                 do_deepread=True, do_discover=True, scope="quick"):
     slug = _slug(question)
+    # broad/exhaustive + a list-shaped goal -> UBIQUITY census (mention-harvest,
+    # keep-everything, loop to saturation). quick -> the normal single pass.
+    if scope in ("broad", "exhaustive") and extract.is_enumerable(question):
+        return census.run(question, slug, scope=scope, backends=names, workers=workers, on_progress=None)
     queries = expand.expand(question, n)
     return harvest.run(queries, slug, goal=question, backends=names, workers=workers,
                        do_extract=do_extract, do_synth=do_synth, do_deepread=do_deepread,
@@ -83,10 +98,11 @@ def tool_mass_search(args):
             os.remove(base + ext)
         except OSError:
             pass
+    scope = _pick_scope(question, args.get("scope"))
     params = {"question": question, "queries": n, "backends": args.get("backends", "web"),
               "workers": int(args.get("workers", 6)), "synth": bool(args.get("synth", True)),
               "extract": bool(args.get("extract", True)), "deep": bool(args.get("deep", True)),
-              "discover": bool(args.get("discover", True))}
+              "discover": bool(args.get("discover", True)), "scope": scope}
     runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_campaign.py")
     kw = {}
     if os.name == "nt":
@@ -97,13 +113,19 @@ def tool_mass_search(args):
     subprocess.Popen([sys.executable, runner, json.dumps(params)],
                      stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
                      cwd=harvest.OUT, close_fds=True, **kw)
-    est = max(1, round(n * 8 / 60))
+    census_mode = scope in ("broad", "exhaustive") and extract.is_enumerable(question)
+    if census_mode:
+        est = {"broad": "2-5", "exhaustive": "8-20"}.get(scope, "3")
+        plan = (f"UBIQUITY census (scope={scope}): harvest mentions from every page, "
+                f"loop to saturation, keep everything ranked by source count")
+    else:
+        est = str(max(1, round(n * 8 / 60)))
+        plan = f"expand into {n} queries, harvest across [{', '.join(names)}], deep-read + synthesize"
     return (f"Campaign '{slug}' started in the background.\n"
             f"  question : {question}\n"
-            f"  plan     : expand into {n} queries, harvest across [{', '.join(names)}], "
-            f"distill + synthesize\n"
+            f"  plan     : {plan}\n"
             f"  runs on local hardware, ~{est} min. Nothing is blocked.\n\n"
-            f"Call  read_campaign(slug=\"{slug}\")  in a bit to get the synthesized answer "
+            f"Call  read_campaign(slug=\"{slug}\")  in a bit to get the result "
             f"(it'll report progress if still running).")
 
 

@@ -17,8 +17,8 @@ BUNDLE = os.path.join(ROOT, "mcpb")
 PKG = os.path.join(BUNDLE, "server", "masssearch")
 DIST = os.path.join(ROOT, "dist")
 
-ENGINE_FILES = ["__init__.py", "brain.py", "search.py", "expand.py",
-                "extract.py", "deepread.py", "synth.py", "harvest.py"]
+ENGINE_FILES = ["__init__.py", "brain.py", "search.py", "expand.py", "extract.py",
+                "deepread.py", "synth.py", "harvest.py", "census.py"]
 
 
 def sync_engine():

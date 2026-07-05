@@ -136,6 +136,7 @@ retried into a ban.
 | `--queries N` | 24 | how many queries to expand a topic into |
 | `--workers N` | 6 | parallel search workers |
 | `--backends`  | `web` | group (`web`/`academic`/`tech`/`all`) or comma-list of resolvers |
+| `--scope` | `auto` | list goals: `quick`=one pass; `broad`/`exhaustive`=ubiquity census. `auto`→exhaustive for "every X" |
 | `--per-backend N` | 6 | results kept per backend per query |
 | `--no-extract` | off | skip the local-LLM per-query distillation step |
 | `--no-synth` | off | skip the final synthesis (the printed answer) |
@@ -209,6 +210,29 @@ python mass_search.py "your topic" --backends web --queries 30 --workers 8
 Config lives in `D:\AI\searxng\my-settings.yml` (JSON format enabled, limiter off
 for local use). A `pwd.py` shim in that folder covers a Unix-only import so it runs
 on Windows. Add more upstream engines by editing `my-settings.yml`.
+
+## Ubiquity: the census mode (`--scope broad|exhaustive`)
+
+"List of overused AI words" wants **precision** — a clean curated list. "Every
+musical instrument ever mentioned on the net" wants **recall** — capture the long
+tail, including the regional/obscure names no knowledge base catalogues. Those are
+opposite goals, so scope switches strategy:
+
+- **`quick`** (default / short lists): one pass, corroboration ≥2 → clean common list.
+- **`broad` / `exhaustive`** ("every / all / complete X" auto-selects this): the
+  **census engine** — harvests *mentions from every page's prose* (not just
+  listicles), spiders links, and **loops round after round, expanding queries from
+  what it's found, until new finds dry up (saturation)**. It **keeps everything**
+  (a single mention counts) and ranks by how many sources mention each, so you can
+  threshold. LLM-vetted entities (the model confirms it's really a `<thing>`) rank
+  above DOM-only structural noise (which is marked `~`).
+
+Example — *"list of every musical instrument ever mentioned on the net"* (broad, ~6
+min): **2,021 distinct mentions across 205 sources, 412 LLM-vetted instruments**
+(Piano, Guqin, Erhu, Yangqin, Melodica, Carillon, Keytar, Timpani…) ranked first,
+long tail kept below. Exhaustive (5 rounds) goes further. All on the ban-safe
+per-host fetch path — ubiquity is *one light touch across many hosts*, the polite
+pattern.
 
 ## Where it's strong / where it's weak
 
