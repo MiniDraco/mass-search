@@ -36,6 +36,59 @@ _LIST_TITLE = re.compile(r"\b\d+\+?\b.{0,30}\b(words|phrases|terms|list|examples
 _LIST_HINT = re.compile(r"\b(list|words|phrases|terms|avoid|overused|common|examples|banned|glossary)\b", re.I)
 
 
+# ---- cross-process campaign lock ------------------------------------------
+# The circuit-breaker + per-host throttle state is per-PROCESS. If two campaigns
+# ran as separate detached processes at once, each would think it alone owns a
+# host -> real hit-rate doubles and the ban protection is void. So only ONE
+# campaign runs at a time, machine-wide, enforced by this lock. Stale locks
+# (crash / kill) expire after LOCK_TTL so a dead campaign never wedges the tool.
+LOCK_TTL = int(os.environ.get("MASS_LOCK_TTL", str(45 * 60)))
+
+
+def _lock_path():
+    os.makedirs(OUT, exist_ok=True)
+    return os.path.join(OUT, ".campaign.lock")
+
+
+def campaign_lock():
+    """Return the active campaign lock {slug,pid,started} or None (clearing stale)."""
+    p = _lock_path()
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        d = None
+    if not d or (time.time() - d.get("started", 0)) > LOCK_TTL:
+        try:
+            os.remove(p)                              # stale / unreadable -> clear
+        except OSError:
+            pass
+        return None
+    return d
+
+
+def acquire_campaign_lock(slug):
+    """Atomically claim the single-campaign slot. False if one is already running."""
+    if campaign_lock() is not None:                   # also clears a stale lock
+        return False
+    try:
+        fd = os.open(_lock_path(), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"slug": slug, "pid": os.getpid(), "started": time.time()}, f)
+    return True
+
+
+def release_campaign_lock():
+    try:
+        os.remove(_lock_path())
+    except OSError:
+        pass
+
+
 def rank_sources_for_goal(goal, records, k, enumerable=False):
     """Pick the K most ON-TOPIC sources to deep-read (goal-keyword overlap + the
     relevance of the query that found them + a list-page bonus). This keeps

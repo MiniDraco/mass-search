@@ -22,12 +22,22 @@ def main():
     params = json.loads(sys.argv[1])
     slug = tools_impl._slug(params["question"])
     base = os.path.join(tools_impl.harvest.OUT, slug)
+
+    # authoritative single-campaign guard (backstop for the spawn race)
+    if not tools_impl.harvest.acquire_campaign_lock(slug):
+        print("BLOCKED: another campaign is already running; not starting this one.")
+        try:
+            open(base + ".done", "w", encoding="utf-8").close()
+        except OSError:
+            pass
+        return
     try:
         tools_impl.run_campaign(params)
         print("campaign complete:", slug)
     except Exception as e:
         print("campaign FAILED:", type(e).__name__, e)
     finally:
+        tools_impl.harvest.release_campaign_lock()
         try:
             open(base + ".done", "w", encoding="utf-8").close()
         except OSError:

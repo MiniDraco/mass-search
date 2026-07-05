@@ -6,7 +6,7 @@ Called by worker.py (which the Node MCP transport spawns per tool call). Kept
 separate from any transport so it's trivially testable. All engine print()s are
 redirected to stderr by the caller, so nothing here needs to worry about stdout.
 """
-import sys, os, re, json, contextlib, subprocess
+import sys, os, re, time, json, contextlib, subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from masssearch import brain, search, expand, extract, harvest, census   # noqa: E402
@@ -88,6 +88,17 @@ def tool_mass_search(args):
     n = int(args.get("queries", 12))
     slug = _slug(question)
     os.makedirs(harvest.OUT, exist_ok=True)
+
+    # ONE campaign at a time, machine-wide: the ban-safety breaker/throttle state
+    # is per-process, so parallel campaigns would each think they own a host and
+    # double the real hit-rate. Refuse a second launch rather than race.
+    active = harvest.campaign_lock()
+    if active:
+        mins = int((time.time() - active.get("started", 0)) / 60)
+        return (f"A campaign is already running: '{active.get('slug')}' (started ~{mins} min ago).\n"
+                f"Only ONE runs at a time so the per-host ban protection stays valid across "
+                f"processes (the circuit breaker is per-process). Let it finish — check it with "
+                f"read_campaign(slug=\"{active.get('slug')}\") — then launch again.")
 
     # A campaign is minutes of local-LLM work -> longer than the MCP call timeout.
     # Launch it DETACHED (survives this worker exiting) and return the slug; the
