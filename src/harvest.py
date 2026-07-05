@@ -65,6 +65,50 @@ def rank_sources_for_goal(goal, records, k, enumerable=False):
     picked = (on_topic or [r for sc, ov, r in ranked])[:k]
     return picked
 
+
+DISCOVER_N = int(os.environ.get("MASS_DISCOVER_N", "6"))
+
+# social share / intent URLs carry the target's keywords in a ?url= param and
+# would falsely match; media/binary files aren't parseable as HTML text.
+_SHARE = re.compile(r"(twitter\.com|//x\.com|facebook\.com|linkedin\.com/(sharing|share)|"
+                    r"/sharer|/sharearticle|/intent/|pinterest\.|reddit\.com/submit|"
+                    r"t\.me/share|wa\.me|api\.whatsapp|mailto:|tel:|/rss|/feed/?$)", re.I)
+_BADEXT = re.compile(r"\.(mp4|mov|avi|webm|mp3|wav|zip|gz|tar|rar|7z|pdf|docx?|xlsx?|pptx?|"
+                     r"jpe?g|png|gif|webp|svg|ico|css|js|json|xml|woff2?|ttf|eot)(\?|#|$)", re.I)
+
+
+def _followable(url):
+    return bool(url) and not (_SHARE.search(url) or _BADEXT.search(url))
+
+
+def discover_urls(seed_docs, goal, extra, seen, enumerable=False):
+    """Find on-topic pages the resolvers never returned, by following the most
+    relevant CONTENT-AREA links out of the seed pages (anchor/URL goal-overlap +
+    a list-page bonus). This reaches sources outside every search backend, on the
+    same ban-safe fetch path. Requires real topical signal so we don't wander."""
+    toks = _goal_tokens(goal)
+    if not toks:
+        return []
+    best = {}
+    for d in seed_docs:
+        for url, anchor in d.get("links", []):
+            if url in seen or not _followable(url):
+                continue
+            hay = (anchor + " " + url).lower()
+            ov = sum(1 for t in toks if t in hay)
+            if ov == 0:                                   # must be on-topic to follow
+                continue
+            score = ov * 2.0
+            if enumerable and anchor:
+                if _LIST_TITLE.search(anchor):
+                    score += 3.0
+                elif _LIST_HINT.search(anchor):
+                    score += 1.0
+            if url not in best or score > best[url][0]:
+                best[url] = (score, anchor)
+    ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)
+    return [{"url": u, "title": a} for u, (s, a) in ranked[:extra]]
+
 OUT = (resolve_out_dir()
        or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "out"))
 
@@ -107,8 +151,8 @@ def _load_records(jsonl_path):
     return recs
 
 
-def run(queries, slug, goal="", backends=None, workers=6,
-        per_backend=6, do_extract=True, do_synth=True, do_deepread=True, on_progress=None):
+def run(queries, slug, goal="", backends=None, workers=6, per_backend=6,
+        do_extract=True, do_synth=True, do_deepread=True, do_discover=True, on_progress=None):
     """
     Harvest `queries` into out/<slug>.*  Returns the consolidated corpus dict.
     on_progress(done, total, record) is called after each query completes.
@@ -153,10 +197,12 @@ def run(queries, slug, goal="", backends=None, workers=6,
     finally:
         jf.close()
 
-    return consolidate(slug, queries, goal, backends, do_synth=do_synth, do_deepread=do_deepread)
+    return consolidate(slug, queries, goal, backends, do_synth=do_synth,
+                       do_deepread=do_deepread, do_discover=do_discover)
 
 
-def consolidate(slug, queries=None, goal="", backends=None, do_synth=True, do_deepread=True):
+def consolidate(slug, queries=None, goal="", backends=None, do_synth=True,
+                do_deepread=True, do_discover=True):
     """Fold the jsonl into <slug>.json + <slug>.md (+ synthesized report)."""
     jsonl_path, json_path, md_path, report_path = _paths(slug)
     records = _load_records(jsonl_path)
@@ -176,11 +222,21 @@ def consolidate(slug, queries=None, goal="", backends=None, do_synth=True, do_de
     # P1: deep-read the top ON-TOPIC sources' FULL pages -- this is where verbatim
     # lists/details come from. List goals parse the DOM structure directly (every
     # <li>/<td> entry, no LLM retyping loss); prose goals distill the body via LLM.
-    deep_docs = 0
+    deep_docs = disc_docs = 0
     enum = extract.is_enumerable(goal)
     if do_deepread and sources and (enum or brain.has_llm()):
         ranked = rank_sources_for_goal(goal, records, deepread.DEFAULT_K, enumerable=enum)
-        docs = deepread.read_sources(ranked, k=deepread.DEFAULT_K, want_items=enum)
+        docs = deepread.read_sources(ranked, k=deepread.DEFAULT_K,
+                                     want_items=enum, want_links=do_discover)
+        # DISCOVERY: follow the seeds' best on-topic links to reach pages no
+        # resolver returned, then read those too (same ban-safe fetch path).
+        if do_discover and docs:
+            seen_urls = {d["url"] for d in docs}
+            found = discover_urls(docs, goal, DISCOVER_N, seen_urls, enumerable=enum)
+            if found:
+                more = deepread.read_sources(found, k=DISCOVER_N, want_items=enum)
+                disc_docs = len(more)
+                docs += more
         deep_docs = len(docs)
         xmodel = brain.extract_model()
         for d in docs:
@@ -201,6 +257,7 @@ def consolidate(slug, queries=None, goal="", backends=None, do_synth=True, do_de
         "n_queries": len(records),
         "n_sources": len(sources),
         "n_deep_read": deep_docs,
+        "n_discovered": disc_docs,
         "n_facts": len(all_facts),
         "queries": queries or [r["query"] for r in records],
         "records": records,
@@ -248,8 +305,9 @@ def _write_report(path, c):
     if c["goal"]:
         L.append(f"**Goal:** {c['goal']}\n")
     dr = f" · {c.get('n_deep_read', 0)} pages deep-read" if c.get("n_deep_read") else ""
+    dc = f" ({c['n_discovered']} via link-following)" if c.get("n_discovered") else ""
     L.append(f"_synthesized by {c['engine']} from {c['n_facts']} facts across "
-             f"{c['n_queries']} searches{dr} · confidence {r.get('confidence', 0):.0%}_\n")
+             f"{c['n_queries']} searches{dr}{dc} · confidence {r.get('confidence', 0):.0%}_\n")
     L.append("## Answer\n")
     L.append(r.get("answer", "") + "\n")
     if r.get("key_findings"):

@@ -53,15 +53,16 @@ def run_campaign(params):
     names = _resolve(params.get("backends"))
     _quiet(_do_campaign, question, int(params.get("queries", 12)), names,
            int(params.get("workers", 6)), bool(params.get("synth", True)),
-           bool(params.get("extract", True)), bool(params.get("deep", True)))
+           bool(params.get("extract", True)), bool(params.get("deep", True)),
+           bool(params.get("discover", True)))
 
 
-def _do_campaign(question, n, names, workers, do_synth, do_extract, do_deepread=True):
+def _do_campaign(question, n, names, workers, do_synth, do_extract, do_deepread=True, do_discover=True):
     slug = _slug(question)
     queries = expand.expand(question, n)
     return harvest.run(queries, slug, goal=question, backends=names, workers=workers,
                        do_extract=do_extract, do_synth=do_synth, do_deepread=do_deepread,
-                       on_progress=None)
+                       do_discover=do_discover, on_progress=None)
 
 
 def tool_mass_search(args):
@@ -84,7 +85,8 @@ def tool_mass_search(args):
             pass
     params = {"question": question, "queries": n, "backends": args.get("backends", "web"),
               "workers": int(args.get("workers", 6)), "synth": bool(args.get("synth", True)),
-              "extract": bool(args.get("extract", True)), "deep": bool(args.get("deep", True))}
+              "extract": bool(args.get("extract", True)), "deep": bool(args.get("deep", True)),
+              "discover": bool(args.get("discover", True))}
     runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_campaign.py")
     kw = {}
     if os.name == "nt":

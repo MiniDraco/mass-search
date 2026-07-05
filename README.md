@@ -25,6 +25,8 @@ topic ──► EXPAND (local LLM: 1 seed -> N diverse queries)
       DEEP-READ (fetch the top ON-TOPIC sources' FULL pages via the same
             │      polite/ban-safe plumbing; list goals parse the DOM structure
             │      directly (<li>/<td> entries), prose goals distill the body)
+            │   +  DISCOVER: follow the seeds' best on-topic links to reach pages
+            │      NO resolver returned (link-following, same ban-safe fetch path)
             ▼
       SYNTHESIZE (local LLM folds all facts -> THE ANSWER; "list me X" goals get
             │       the verbatim items back, not a summary)
@@ -161,6 +163,7 @@ Env (both `MASS_` and `RIPOSTE_` prefixes work):
 | `MASS_LOCAL_URL` | auto | override the local endpoint |
 | `MASS_DEEPREAD_K` | `8` | how many top sources to read full-body per campaign |
 | `MASS_DEEPREAD_CHARS` | `12000` | chars of page text fed to the distiller |
+| `MASS_DISCOVER_N` | `6` | extra pages to reach by following the seeds' on-topic links |
 | `MASS_SEARCH_GAP` | `1.5` | default min seconds between hits to one host (per-host overrides in code) |
 | `MASS_HOST_CAP` | `300` | hard cap on requests to any one host per run |
 | `MASS_CACHE_TTL` | 604800 | search cache lifetime, seconds (7 days) |
@@ -228,11 +231,19 @@ Field-tested over multi-campaign runs (hundreds of requests, zero bans):
   actual authoritative listicles.
 - **Confidence is computed**, not self-graded — from cross-source corroboration
   (list goals) or mean relevance × deep-read coverage × fact volume (prose goals).
+- **Reaching beyond the resolvers:** keyless search engines are a shallow well
+  (Brave killed its free tier, most others are anti-bot or self-host). So extra
+  coverage comes from **link-following** — parsing the top pages and following
+  their most on-topic links to reach sources no search backend returned (a
+  `instant-meshes-vs-zbrush` comparison, a SIGGRAPH paper, etc.). Yield is high
+  for research/reference goals that cross-link, lower for thin listicles that
+  don't. For raw general breadth, run a **local SearXNG** and set
+  `MASS_SEARXNG_URL` — it fans each query across ~70 upstream engines.
 - **Remaining lever:** the default reasoner is an 8B. Point `MASS_EXTRACT_MODEL`
   at a 14B–32B (e.g. on the idle-GPU Ollama) for even cleaner extraction.
 
 **Roadmap:** auto-select the resolver group by topic · promote local SearXNG to
-the primary general-web index · widen list coverage (read more listicles per run).
+the primary general-web index · parse discovered PDFs (academic sources).
 
 ## Output shape
 

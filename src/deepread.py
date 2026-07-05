@@ -9,6 +9,7 @@ hands the full body to the extractor. Gated to the top-K sources per campaign.
 """
 import os, re, html
 from html.parser import HTMLParser
+from urllib.parse import urljoin
 from concurrent.futures import ThreadPoolExecutor
 
 from . import search
@@ -18,6 +19,9 @@ DEFAULT_K = int(os.environ.get("MASS_DEEPREAD_K", "8"))
 
 _BLOCKS = re.compile(r"<(script|style|noscript|svg|head|nav|footer|header|aside|form|button)[^>]*>.*?</\1>",
                      re.S | re.I)
+# lighter strip for LINK extraction: keep nav/footer/"related" areas, because
+# that's where cross-links to related pages live (discovery wants those).
+_SCRIPTS = re.compile(r"<(script|style|noscript|svg|head)[^>]*>.*?</\1>", re.S | re.I)
 _TAGS = re.compile(r"<[^>]+>")
 _WS = re.compile(r"[ \t\r\f\v]+")
 _NL = re.compile(r"\n\s*\n+")
@@ -73,13 +77,59 @@ def extract_items(raw, cap=400):
     return list(dict.fromkeys(p.items))[:cap]
 
 
+class _LinkParser(HTMLParser):
+    """Outbound links + their anchor text, from the content area."""
+    def __init__(self, base):
+        super().__init__()
+        self.base, self.cur, self.buf, self.links = base, None, [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self.cur = dict(attrs).get("href") or ""
+            self.buf = []
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self.cur is not None:
+            try:
+                full = urljoin(self.base, self.cur)
+            except Exception:
+                full = ""
+            anchor = re.sub(r"\s+", " ", "".join(self.buf)).strip()
+            if full.startswith("http"):
+                self.links.append((full.split("#")[0], anchor[:120]))
+            self.cur, self.buf = None, []
+
+    def handle_data(self, data):
+        if self.cur is not None:
+            self.buf.append(data)
+
+
+def extract_links(raw, base_url, cap=300):
+    """Deduped (url, anchor) outbound links from the page's CONTENT area
+    (nav/footer/header stripped first, so these are real body links)."""
+    try:
+        p = _LinkParser(base_url)
+        p.feed(_SCRIPTS.sub(" ", raw))               # keep nav/footer links for discovery
+    except Exception:
+        return []
+    seen, out = set(), []
+    for u, a in p.links:
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append((u, a))
+        if len(out) >= cap:
+            break
+    return out
+
+
 def fetch_text(url):
     """Back-compat: stripped page text ('' on any block/error)."""
     doc = _fetch(url, want_items=False)
     return doc["text"] if doc else ""
 
 
-def _fetch(url, want_items=False):
+def _fetch(url, want_items=False, want_links=False):
     if not url or not url.startswith("http"):
         return None
     try:
@@ -89,19 +139,21 @@ def _fetch(url, want_items=False):
     doc = {"text": _to_text(raw)}
     if want_items:
         doc["items"] = extract_items(raw)
+    if want_links:
+        doc["links"] = extract_links(raw, url)
     return doc
 
 
-def read_sources(sources, k=DEFAULT_K, workers=6, want_items=False):
+def read_sources(sources, k=DEFAULT_K, workers=6, want_items=False, want_links=False):
     """Fetch the top-k sources concurrently (polite per-host). Returns
-    [{url, title, text, items?}]. With want_items, also parses the DOM for
-    verbatim list/table entries (structure-aware, for 'list me X' goals)."""
+    [{url, title, text, items?, links?}]. want_items = parse DOM list/table
+    entries; want_links = harvest content-area outbound links for discovery."""
     picked = [s for s in sources if s.get("url", "").startswith("http")][:k]
     if not picked:
         return []
 
     def work(s):
-        doc = _fetch(s.get("url", ""), want_items=want_items)
+        doc = _fetch(s.get("url", ""), want_items=want_items, want_links=want_links)
         if not doc:
             return None
         if len(doc["text"]) <= 200 and not doc.get("items"):

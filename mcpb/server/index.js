@@ -49,6 +49,7 @@ const TOOLS = [
         backends: { type: "string", description: "group or comma-list", default: "web" },
         workers: { type: "integer", description: "parallel search workers", default: 6 },
         deep: { type: "boolean", description: "read the top sources' full page bodies (not just snippets)", default: true },
+        discover: { type: "boolean", description: "follow the seeds' on-topic links to reach sources no resolver returned", default: true },
         synth: { type: "boolean", description: "synthesize the final answer", default: true },
         extract: { type: "boolean", description: "LLM-distill each result set", default: true }
       },
