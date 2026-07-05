@@ -50,8 +50,35 @@ def _lock_path():
     return os.path.join(OUT, ".campaign.lock")
 
 
+def _pid_alive(pid):
+    """True if process `pid` is still running (cross-platform, stdlib-only)."""
+    if not pid:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            h = ctypes.windll.kernel32.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE
+            if not h:
+                return False
+            alive = ctypes.windll.kernel32.WaitForSingleObject(h, 0) == 0x102     # WAIT_TIMEOUT
+            ctypes.windll.kernel32.CloseHandle(h)
+            return alive
+        except Exception:
+            return True                              # can't tell -> assume alive (safe)
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return True
+
+
 def campaign_lock():
-    """Return the active campaign lock {slug,pid,started} or None (clearing stale)."""
+    """Return the active campaign lock {slug,pid,started} or None. Clears the lock
+    if it's stale (past TTL) OR its owning process is no longer alive (crash)."""
     p = _lock_path()
     if not os.path.exists(p):
         return None
@@ -60,9 +87,10 @@ def campaign_lock():
             d = json.load(f)
     except Exception:
         d = None
-    if not d or (time.time() - d.get("started", 0)) > LOCK_TTL:
+    stale = (not d) or (time.time() - d.get("started", 0)) > LOCK_TTL or not _pid_alive(d.get("pid"))
+    if stale:
         try:
-            os.remove(p)                              # stale / unreadable -> clear
+            os.remove(p)
         except OSError:
             pass
         return None
