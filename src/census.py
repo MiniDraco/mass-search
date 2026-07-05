@@ -18,6 +18,7 @@ cap). Ubiquity spreads one light touch across MANY hosts -- the polite pattern.
 Output is compatible with read_campaign; items are ranked by how many distinct
 sources mention them, with the count kept so you can threshold the returns.
 """
+import os
 import re
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -63,17 +64,35 @@ Return ONLY a JSON array of {n} strings."""
 
 def _norm(item):
     """Dedup key: lowercase, drop parenthetical qualifiers + leading article."""
-    import re
     v = re.sub(r"\([^)]*\)", "", item).strip().strip('"“”\'').rstrip(",;:.")
     v = re.sub(r"^(the|a|an)\s+", "", v, flags=re.I).strip()
     return v.lower()
+
+
+def _qnorm(q):
+    """Query dedup key: lowercase, collapse non-alphanumerics -> catches
+    'Indonesian gamelan' / 'indonesian  gamelan!' as the same searched query."""
+    return re.sub(r"[^a-z0-9]+", " ", (q or "").lower()).strip()
+
+
+def _load_prior(slug):
+    """Prior census corpus for this slug, so a re-run CONTINUES without repeats."""
+    _, jj, _, _ = harvest._paths(slug)
+    if not os.path.exists(jj):
+        return None
+    try:
+        with open(jj, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if d.get("mode") == "census" else None
+    except Exception:
+        return None
 
 
 def _more_queries(goal, entity, counts, n, done, model):
     if not brain.has_llm():
         return []
     sample = ", ".join(list({v[0] for v in counts.values()})[:40]) or entity
-    dones = "; ".join(list(done)[-20:])
+    dones = "; ".join(sorted(done)[:60])            # show the LLM the real done-list
     try:
         res = brain.ask(_MORE_PROMPT.format(entity=entity, sample=sample, n=n, done=dones),
                         want_json=True, model=model)
@@ -85,22 +104,44 @@ def _more_queries(goal, entity, counts, n, done, model):
     return [str(x).strip() for x in data if isinstance(x, str) and x.strip()][:n] if isinstance(data, list) else []
 
 
-def run(goal, slug, scope="broad", backends=None, workers=6, on_progress=None):
+def run(goal, slug, scope="broad", backends=None, workers=6, resume=True, on_progress=None):
     cfg = SCOPES.get(scope, SCOPES["broad"])
     entity = extract.target_entity(goal)
     names = backends or search.DEFAULT_BACKENDS
     xmodel = brain.extract_model()
 
-    counts = {}                     # norm -> [display, {source urls}]
+    counts = {}                     # norm -> [display, {source urls}, vetted]
     seen_urls = set()
-    done_q = set()
+    done_q = set()                  # searched query strings (verbatim)
+    done_norm = set()               # normalized searched-query keys (no-repeat)
+    prior_rounds = 0
     records, all_sources, seen_src = [], [], set()
+
+    # RESUME: seed from a prior census of this slug so multi-round (even across
+    # separate runs) never repeats a query or re-reads a page -- it just grows.
+    if resume:
+        prior = _load_prior(slug)
+        if prior:
+            for it in prior.get("items", []):
+                k = _norm(it.get("item", ""))
+                if k:
+                    n = int(it.get("sources", 1) or 1)
+                    counts[k] = [it["item"], {f"__p__{k}__{i}" for i in range(n)}, bool(it.get("vetted"))]
+            for q in prior.get("done_queries", []):
+                done_q.add(q)
+                done_norm.add(_qnorm(q))
+            seen_urls |= set(prior.get("seen_urls", []))
+            prior_rounds = int(prior.get("n_rounds", 0) or 0)
 
     queries = expand.expand(goal, cfg["q0"])
     for rnd in range(cfg["rounds"]):
         before = len(counts)
-        fresh = [q for q in queries if q not in done_q]
-        done_q.update(fresh)
+        fresh = [q for q in queries if _qnorm(q) not in done_norm]
+        for q in fresh:
+            done_q.add(q)
+            done_norm.add(_qnorm(q))
+        if not fresh:                                    # queries exhausted -> done
+            break
 
         # 1. harvest this round's queries across the resolvers
         round_hits = []
@@ -157,34 +198,43 @@ def run(goal, slug, scope="broad", backends=None, workers=6, on_progress=None):
         # 4. saturation: stop once a round barely adds anything new
         if rnd > 0 and added < cfg["sat"]:
             break
-        # 5. widen: generate NEW queries from what we've found (drift-guarded)
+        # 5. widen: generate NEW queries from what we've found (drift-guarded),
+        #    dropping any that normalize to an already-searched query.
         if rnd < cfg["rounds"] - 1:
-            queries = _more_queries(goal, entity, counts, cfg["qn"], done_q, xmodel) \
-                or expand.expand(goal + f" round {rnd + 2}", cfg["qn"])
+            gen = _more_queries(goal, entity, counts, cfg["qn"], done_q, xmodel)
+            gen = [q for q in gen if _qnorm(q) not in done_norm]
+            queries = gen or [q for q in expand.expand(goal + f" facet {rnd + 2}", cfg["qn"])
+                              if _qnorm(q) not in done_norm]
 
-    return _finalize(goal, slug, scope, entity, names, counts, records, all_sources)
+    return _finalize(goal, slug, scope, entity, names, counts, records, all_sources,
+                     done_q, seen_urls, prior_rounds)
 
 
-def _finalize(goal, slug, scope, entity, names, counts, records, sources):
+def _finalize(goal, slug, scope, entity, names, counts, records, sources,
+              done_q=None, seen_urls=None, prior_rounds=0):
     # vetted (LLM confirmed it's really the entity) first, then by source count
     ranked = sorted(counts.values(), key=lambda v: (v[2], len(v[1])), reverse=True)
     items = [{"item": disp, "sources": len(src), "vetted": bool(vet)} for disp, src, vet in ranked]
     n_vetted = sum(1 for it in items if it["vetted"])
+    total_rounds = prior_rounds + len(records)
     listed = [f"{it['item']}  ({it['sources']}){'' if it['vetted'] else ' ~'}" for it in items]
 
     corpus = {
         "slug": slug, "goal": goal, "mode": "census", "scope": scope, "entity": entity,
         "backends": names, "engine": brain.engine_info(), "safety": search.status_report(),
-        "n_queries": sum(1 for _ in records), "n_rounds": len(records),
+        "n_queries": len(done_q or []), "n_rounds": total_rounds,
         "n_sources": len(sources), "n_deep_read": sum(r.get("pages_read", 0) for r in records),
         "n_discovered": 0, "n_facts": len(items), "n_items": len(items),
+        "done_queries": sorted(done_q or []),        # resume state: never re-search
+        "seen_urls": sorted(seen_urls or []),        # resume state: never re-read
         "queries": [r["query"] for r in records], "records": records, "sources": sources,
         "facts": [{"fact": it["item"], "query": f"census x{it['sources']}"} for it in items],
         "items": items,
         "n_vetted": n_vetted,
         "report": {
             "answer": (f"Census of \"{entity}\": {len(items)} distinct mentions across "
-                       f"{len(records)} round(s) / {len(sources)} sources (scope={scope}). "
+                       f"{total_rounds} cumulative round(s) / {len(done_q or [])} unique queries "
+                       f"(scope={scope}; re-run the same slug to continue with no repeats). "
                        f"{n_vetted} LLM-vetted as real {entity}s (listed first); the rest (marked ~) "
                        f"are DOM-only and may include headings/categories. "
                        f"(N) = how many sources mention each, so you can threshold."),
