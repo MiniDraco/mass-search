@@ -173,19 +173,24 @@ def consolidate(slug, queries=None, goal="", backends=None, do_synth=True, do_de
                 seen.add(u)
                 sources.append(r)
 
-    # P1: deep-read the top ON-TOPIC sources' FULL page bodies (not just snippets)
-    # and distill from those -- this is where verbatim lists/details come from.
+    # P1: deep-read the top ON-TOPIC sources' FULL pages -- this is where verbatim
+    # lists/details come from. List goals parse the DOM structure directly (every
+    # <li>/<td> entry, no LLM retyping loss); prose goals distill the body via LLM.
     deep_docs = 0
-    if do_deepread and brain.has_llm() and sources:
-        ranked = rank_sources_for_goal(goal, records, deepread.DEFAULT_K,
-                                       enumerable=extract.is_enumerable(goal))
-        docs = deepread.read_sources(ranked, k=deepread.DEFAULT_K)
+    enum = extract.is_enumerable(goal)
+    if do_deepread and sources and (enum or brain.has_llm()):
+        ranked = rank_sources_for_goal(goal, records, deepread.DEFAULT_K, enumerable=enum)
+        docs = deepread.read_sources(ranked, k=deepread.DEFAULT_K, want_items=enum)
         deep_docs = len(docs)
-        enum = extract.is_enumerable(goal)
         xmodel = brain.extract_model()
         for d in docs:
-            for f in extract.extract_deep(goal, d["url"], d["text"], enumerable=enum, model=xmodel):
-                all_facts.append({"fact": f, "query": "deep-read: " + d["url"]})
+            tag = "deep-read: " + d["url"]
+            if enum:
+                for it in d.get("items", []):        # verbatim DOM items -> corroboration filters noise
+                    all_facts.append({"fact": it, "query": tag})
+            else:
+                for f in extract.extract_deep(goal, d["url"], d["text"], enumerable=False, model=xmodel):
+                    all_facts.append({"fact": f, "query": tag})
 
     corpus = {
         "slug": slug,

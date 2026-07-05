@@ -14,14 +14,23 @@ from . import brain, extract
 
 _CHUNK = 60
 
-# page-chrome / navigation junk that leaks into deep-read extraction
-_JUNK = re.compile(r"(tagged with|table of contents|add a header|read more|"
-                   r"subscribe|newsletter|cookie|privacy policy|sign in|log in|"
-                   r"»|\||©|^https?://|^\W*$|latecomer|walknotes)", re.I)
+# page-chrome / navigation / section-heading junk that leaks into DOM extraction
+_JUNK = re.compile(
+    r"(tagged with|table of contents|frequently asked|^faqs?$|add a header|"
+    r"read more|related (posts|articles|reading)|you might also|more (posts|articles)|"
+    r"leave a (comment|reply)|^comments?$|share (this|on)|subscribe|newsletter|"
+    r"sign (in|up)|log ?in|cookie|privacy policy|terms of|©|all rights reserved|"
+    r"recent posts|popular posts|^categor(y|ies)$|^tags?$|^menu$|^search$|^home$|"
+    r"about (the author|us)|contact us|follow us|»|\||^https?://|^\W*$|"
+    r"latecomer|walknotes|\?\s*$|"
+    # table column-headers that recur across listicle pages:
+    r"^ai (word|phrase|term)s?$|human alternative|^word ?/? ?phrase$|"
+    r"frequency of use|^(before|after|example|category|alternative)s?$)", re.I)
 
 
 def _clean_item(fact):
-    return fact.strip().lstrip("-*0123456789.)• \t").strip().strip('"“”\'')
+    v = fact.strip().lstrip("-*0123456789.)• \t").strip().strip('"“”\'')
+    return v.rstrip(",;:")                           # merge "Additionally" / "Additionally,"
 
 _SYNTH_PROMPT = """You are a research analyst closing out a search campaign.
 Synthesize a final answer to the GOAL using ONLY the harvested facts below. Do

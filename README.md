@@ -22,8 +22,9 @@ topic ──► EXPAND (local LLM: 1 seed -> N diverse queries)
       EXTRACT (local LLM pulls the facts/answer out of each result set)
             │
             ▼
-      DEEP-READ (fetch the top-ranked sources' FULL page bodies via the same
-            │      polite/ban-safe plumbing, distill from the real text)
+      DEEP-READ (fetch the top ON-TOPIC sources' FULL pages via the same
+            │      polite/ban-safe plumbing; list goals parse the DOM structure
+            │      directly (<li>/<td> entries), prose goals distill the body)
             ▼
       SYNTHESIZE (local LLM folds all facts -> THE ANSWER; "list me X" goals get
             │       the verbatim items back, not a summary)
@@ -214,12 +215,17 @@ Field-tested over multi-campaign runs (hundreds of requests, zero bans):
   search cap and never gets the IP blocked — the circuit breaker routes around
   every soft block.
 - **Deep-read + extractive mode** turn "list me X" goals into the actual verbatim
-  list. **Goal-aware ranking** keeps off-topic pages out of the deep-read, and
-  **cross-source corroboration** ranks items by how many sources repeat them —
-  so recurring real entries surface and one-off page-chrome noise drops. Example:
-  *"list of overused AI words"* → a clean 52-item list, all corroborated across
-  2+ sources (elevate, delve, tapestry, plethora, seamless, "in today's digital
-  age"…), no blog-title junk.
+  list. Three things make the list clean and complete:
+  1. **Structure-aware parsing** — list goals read the page *DOM* (`<li>`/`<td>`
+     entries) rather than flattening to text, so the full verbatim list comes
+     straight from the HTML (no LLM retyping loss — and no per-page LLM call).
+  2. **Goal-aware ranking** keeps off-topic pages out of the deep-read entirely.
+  3. **Cross-source corroboration** ranks items by how many sources repeat them,
+     so recurring real entries surface and one-off page-chrome drops.
+  Example: *"list of overused AI words"* → a clean ~60-item list, every entry
+  corroborated across 2+ sources (delve, leverage, synergy, "paradigm shift",
+  "it is important to note"…), zero blog-title/heading junk — pulled from the
+  actual authoritative listicles.
 - **Confidence is computed**, not self-graded — from cross-source corroboration
   (list goals) or mean relevance × deep-read coverage × fact volume (prose goals).
 - **Remaining lever:** the default reasoner is an 8B. Point `MASS_EXTRACT_MODEL`
