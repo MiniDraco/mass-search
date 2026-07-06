@@ -33,7 +33,7 @@ _EXHAUSTIVE = re.compile(r"\b(every|all|complete|comprehensive|exhaustive|master
 
 
 def _auto_scope(goal):
-    if extract.is_enumerable(goal) and _EXHAUSTIVE.search(goal or ""):
+    if extract.census_suitable(goal) and _EXHAUSTIVE.search(goal or ""):
         return "exhaustive"
     return "quick"
 
@@ -108,7 +108,7 @@ def main():
         queries = expand.expand(seed, args.queries)
 
     scope = _auto_scope(goal) if args.scope == "auto" else args.scope
-    census_mode = scope in ("broad", "exhaustive") and extract.is_enumerable(goal)
+    census_mode = scope in ("broad", "exhaustive") and extract.census_suitable(goal)
 
     if not census_mode and not queries:
         ap.error("no queries to run")

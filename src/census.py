@@ -133,6 +133,15 @@ def run(goal, slug, scope="broad", backends=None, workers=6, resume=True, on_pro
             seen_urls |= set(prior.get("seen_urls", []))
             prior_rounds = int(prior.get("n_rounds", 0) or 0)
 
+    # live progress: append each round to the jsonl + print, so read_campaign
+    # shows real movement instead of looking stalled for the whole run.
+    jpath = harvest._paths(slug)[0]
+    try:
+        jf = open(jpath, "a", encoding="utf-8")
+    except Exception:
+        jf = None
+    print(f"[census] entity={entity!r} scope={scope}: expanding queries...", flush=True)
+
     queries = expand.expand(goal, cfg["q0"])
     for rnd in range(cfg["rounds"]):
         before = len(counts)
@@ -192,6 +201,11 @@ def run(goal, slug, scope="broad", backends=None, workers=6, resume=True, on_pro
                "results": round_hits[:40], "digest": {"relevance": 1.0},
                "round": rnd + 1, "pages_read": len(docs), "new_items": added, "total_items": len(counts)}
         records.append(rec)
+        if jf:                                           # live jsonl -> read_campaign sees progress
+            jf.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            jf.flush()
+        print(f"[census] round {rnd + 1}/{cfg['rounds']}: {len(round_hits)} hits, "
+              f"{rec['pages_read']} pages, +{added} -> {len(counts)} items", flush=True)
         if on_progress:
             on_progress(rnd + 1, cfg["rounds"], rec)
 
@@ -206,6 +220,8 @@ def run(goal, slug, scope="broad", backends=None, workers=6, resume=True, on_pro
             queries = gen or [q for q in expand.expand(goal + f" facet {rnd + 2}", cfg["qn"])
                               if _qnorm(q) not in done_norm]
 
+    if jf:
+        jf.close()
     return _finalize(goal, slug, scope, entity, names, counts, records, all_sources,
                      done_q, seen_urls, prior_rounds)
 
@@ -244,12 +260,11 @@ def _finalize(goal, slug, scope, entity, names, counts, records, sources,
             "enumerated": True,
         },
     }
-    jf, jj, md, rp = harvest._paths(slug)
+    _jl, jj, md, rp = harvest._paths(slug)
     with open(jj, "w", encoding="utf-8") as f:
         json.dump(corpus, f, ensure_ascii=False, indent=2)
     harvest._write_md(md, corpus)
     harvest._write_report(rp, corpus)
-    with open(jf, "w", encoding="utf-8") as f:      # jsonl progress = per-round
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    # (jsonl is written live per-round in run(); don't rewrite it here or a
+    #  resumed run would lose the prior rounds' progress lines.)
     return corpus

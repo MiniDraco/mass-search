@@ -17,7 +17,7 @@ _EXHAUSTIVE = re.compile(r"\b(every|all|complete|comprehensive|exhaustive|master
 def _pick_scope(goal, explicit):
     if explicit in ("quick", "broad", "exhaustive"):
         return explicit
-    if extract.is_enumerable(goal) and _EXHAUSTIVE.search(goal or ""):
+    if extract.census_suitable(goal) and _EXHAUSTIVE.search(goal or ""):
         return "exhaustive"                          # "every X" auto-triggers ubiquity mode
     return "quick"
 
@@ -70,9 +70,10 @@ def run_campaign(params):
 def _do_campaign(question, n, names, workers, do_synth, do_extract,
                  do_deepread=True, do_discover=True, scope="quick"):
     slug = _slug(question)
-    # broad/exhaustive + a list-shaped goal -> UBIQUITY census (mention-harvest,
-    # keep-everything, loop to saturation). quick -> the normal single pass.
-    if scope in ("broad", "exhaustive") and extract.is_enumerable(question):
+    # broad/exhaustive + an open-ended entity-list goal -> UBIQUITY census. But a
+    # question/shopping goal ("where can I buy... list retailers") is NOT census
+    # material even with an explicit broad scope -> fall through to synth.
+    if scope in ("broad", "exhaustive") and extract.census_suitable(question):
         return census.run(question, slug, scope=scope, backends=names, workers=workers, on_progress=None)
     queries = expand.expand(question, n)
     return harvest.run(queries, slug, goal=question, backends=names, workers=workers,
@@ -124,7 +125,7 @@ def tool_mass_search(args):
     subprocess.Popen([sys.executable, runner, json.dumps(params)],
                      stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
                      cwd=harvest.OUT, close_fds=True, **kw)
-    census_mode = scope in ("broad", "exhaustive") and extract.is_enumerable(question)
+    census_mode = scope in ("broad", "exhaustive") and extract.census_suitable(question)
     if census_mode:
         est = {"broad": "2-5", "exhaustive": "8-20"}.get(scope, "3")
         plan = (f"UBIQUITY census (scope={scope}): harvest mentions from every page, "

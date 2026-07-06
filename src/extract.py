@@ -78,12 +78,30 @@ _DEEP_MODE_LIST = ("This goal asks for a LIST: extract the ACTUAL items VERBATIM
 _DEEP_MODE_FACT = "Extract specific, concrete facts / data points (not vague summary)."
 
 # goals that want enumerated items back verbatim, not an abstractive summary (P3)
-_ENUM_RE = re.compile(r"\b(list|lists|words|phrases|terms|examples|names|"
-                      r"vocabulary|banned|overused|clich|enumerate)\b", re.I)
+_ENUM_RE = re.compile(r"\b(list|lists|words|phrases|terms|examples|names|vocabulary|"
+                      r"banned|overused|clich|enumerate|every|all|complete|"
+                      r"comprehensive|exhaustive)\b", re.I)
 
 
 def is_enumerable(goal):
     return bool(_ENUM_RE.search(goal or ""))
+
+
+# question / shopping shaped goals want a synthesized ANSWER, not an open-ended
+# entity census -- even if they contain the word "list".
+_NOT_CENSUS = re.compile(
+    r"^\s*(where|who|when|which|how|why|is|are|can|could|do|does|did|should|would|will|what)\b|"
+    r"\b(in stock|for sale|to buy|buy|purchase|price|prices|cost|costs|near me|right now|"
+    r"cheapest|coupon|discount|deal|available|availability|vs\.?|versus|review|best)\b", re.I)
+
+
+def census_suitable(goal):
+    """True only for open-ended 'list/every <entity-type>' goals -- the census
+    (ubiquity) engine's job. Shopping/answer questions fall back to synth."""
+    if not is_enumerable(goal) or _NOT_CENSUS.search(goal or ""):
+        return False
+    ent = target_entity(goal)
+    return bool(ent) and len(ent.split()) <= 8 and "?" not in ent
 
 
 # ---- ubiquity: harvest every mention of an entity type from ARBITRARY prose --
